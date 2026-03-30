@@ -1,0 +1,52 @@
+# ============================================================
+# .gitignore для Polymarket Copy-Trading Bot
+# ============================================================
+
+# Секреты — НИКОГДА не коммитить!
+.env
+*.pem
+*.key
+
+# Python кэш
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+
+# Виртуальные окружения
+venv/
+.venv/
+env/
+ENV/
+.python-version
+
+# Логи (локальные)
+logs/*.log
+logs/*.log.*
+
+# Pip
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+
+# Временные файлы
+*.tmp
+*.bak

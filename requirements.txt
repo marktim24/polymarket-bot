@@ -1,0 +1,23 @@
+# Polymarket Copy-Trading Bot — зависимости
+# Установка: pip install -r requirements.txt
+
+# ---- Polymarket SDK ----
+py-clob-client>=0.16.0        # Официальный SDK для CLOB API Polymarket
+
+# ---- Blockchain ----
+web3>=6.0.0                    # Взаимодействие с Polygon (баланс кошелька)
+
+# ---- Переменные окружения ----
+python-dotenv>=1.0.0           # Загрузка .env файла
+
+# ---- Telegram уведомления ----
+pyTelegramBotAPI>=4.14.0       # Telegram Bot API
+
+# ---- HTTP запросы ----
+requests>=2.31.0               # HTTP клиент для Data API и CLOB API
+
+# ---- Веб-дашборд ----
+Flask>=3.0.0                   # Flask для веб-дашборда
+
+# ---- Утилиты ----
+schedule>=1.2.0                # Планировщик периодических задач (опционально)
