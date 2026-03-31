@@ -1,13 +1,11 @@
 """
-bot.py — Главный модуль Polymarket Copy-Trading Bot.
+bot.py — Главный модуль Polymarket Copy-Trading Bot v2.0.
 
-Оркестрирует все компоненты:
-- Настройка логирования (файл + консоль)
-- Health check при старте
-- Запуск монитора, исполнителя, стоп-лосс потока
-- Telegram уведомления о всех событиях
-- Периодический статус-отчёт каждые 6 часов
-- Корректное завершение при Ctrl+C
+Изменения v2.0:
+- Новый формат Telegram SIGNAL-карточек (HIGH/MEDIUM/IGNORE)
+- Callbacks для take-profit, time-stop, trader-exit
+- Передача MonitorManager в RiskManager для sell-сигналов
+- Статус включает дневные лимиты и trading_halted
 """
 
 import sys
@@ -136,29 +134,50 @@ class TelegramNotifier:
 
     # ---- Шаблоны сообщений ----
 
-    def notify_trade_copied(self, position: OpenPosition, trader_name: str):
-        """✅ Новая скопированная сделка."""
-        mode_tag = "🔒 DRY-RUN" if config.DRY_RUN else "💰 РЕАЛЬНАЯ"
+    def notify_signal(
+        self,
+        position: OpenPosition,
+        activity: TradeActivity,
+    ):
+        """
+        📡 SIGNAL карточка — основной формат уведомления v2.0.
+
+        SIGNAL:
+        Type:          HIGH / MEDIUM
+        Trader:        lebronjames23
+        Market:        ...
+        Side:          BUY
+        Entry Price:   0.3500
+        Position Size: $5.00
+        Confidence:    85%
+        Reason:        confluence: lebronjames23, sayber | цена=0.35
+        """
+        mode_tag = "🔒 DRY-RUN" if config.DRY_RUN else "💰 РЕАЛ"
+
+        signal_emoji = {"HIGH": "🔥", "MEDIUM": "📊"}.get(position.signal_type, "📋")
+
         text = (
-            f"✅ <b>Сделка скопирована</b> {mode_tag}\n\n"
-            f"👤 Трейдер: <code>{trader_name}</code>\n"
-            f"🎯 Рынок: <code>{position.market_slug or position.token_id[:20]}</code>\n"
-            f"💵 Цена входа: <b>{position.entry_price:.4f}</b>\n"
-            f"💰 Размер: <b>${position.size_usd:.2f}</b>\n"
-            f"📊 Акций: {position.shares:.4f}\n"
-            f"🆔 Ордер: <code>{position.order_id}</code>\n"
-            f"🕒 {position.opened_at.strftime('%H:%M:%S UTC')}"
+            f"{signal_emoji} <b>SIGNAL: {position.signal_type}</b> | {mode_tag}\n\n"
+            f"<b>Type:</b>          {position.signal_type}\n"
+            f"<b>Trader:</b>        {position.trader_name}\n"
+            f"<b>Market:</b>        <code>{position.market_slug or position.token_id[:20]}</code>\n"
+            f"<b>Side:</b>          BUY\n"
+            f"<b>Entry Price:</b>   {position.entry_price:.4f}\n"
+            f"<b>Position Size:</b> ${position.size_usd:.2f}\n"
+            f"<b>Confidence:</b>    {activity.confidence * 100:.0f}%\n"
+            f"<b>Reason:</b>        {activity.signal_reason or '—'}\n\n"
+            f"🆔 <code>{position.order_id}</code> | "
+            f"🕒 {position.opened_at.strftime('%H:%M UTC')}"
         )
         self.send(text)
 
     def notify_trade_skipped(self, activity: TradeActivity, reason: str, trader_name: str):
-        """⏭ Пропущенная сделка с причиной."""
+        """⏭ Пропущенная сделка — краткое уведомление."""
+        signal_type = getattr(activity, "signal_type", "?")
         text = (
-            f"⏭ <b>Сделка пропущена</b>\n\n"
-            f"👤 Трейдер: <code>{trader_name}</code>\n"
-            f"💵 Цена: {activity.price:.4f} | Размер: ${activity.size_usd:.2f}\n"
-            f"❓ Причина: {reason}\n"
-            f"🆔 <code>{activity.id[:20]}</code>"
+            f"⏭ <b>Пропуск [{signal_type}]</b>\n\n"
+            f"👤 <code>{trader_name}</code> | цена={activity.price:.3f}\n"
+            f"❓ {reason}"
         )
         self.send(text)
 
@@ -166,45 +185,90 @@ class TelegramNotifier:
         """❌ Ошибка исполнения."""
         text = (
             f"❌ <b>Ошибка исполнения</b>\n\n"
-            f"👤 Трейдер: <code>{trader_name}</code>\n"
-            f"🆔 <code>{activity.id[:20]}</code>\n"
+            f"👤 <code>{trader_name}</code>\n"
             f"⚠️ {error}"
         )
         self.send(text)
 
     def notify_stop_loss(self, position: OpenPosition):
-        """🚨 Сработал стоп-лосс."""
+        """🚨 Стоп-лосс."""
         text = (
-            f"🚨 <b>Стоп-лосс сработал!</b>\n\n"
-            f"👤 Трейдер: <code>{position.trader_name}</code>\n"
-            f"🎯 Рынок: <code>{position.market_slug or position.token_id[:20]}</code>\n"
-            f"📉 Вход: {position.entry_price:.4f} → Сейчас: {position.current_price:.4f}\n"
+            f"🚨 <b>СТОП-ЛОСС [{position.signal_type}]</b>\n\n"
+            f"👤 {position.trader_name} | "
+            f"<code>{position.market_slug or position.token_id[:16]}</code>\n"
+            f"📉 Вход: {position.entry_price:.4f} → {position.current_price:.4f}\n"
             f"💸 PnL: <b>${position.unrealized_pnl:.2f}</b>\n"
             f"🆔 <code>{position.order_id}</code>"
         )
         self.send(text)
 
+    def notify_take_profit(self, position: OpenPosition, tp_name: str):
+        """💰 Тейк-профит."""
+        tp_pct = {"tp1": "20%", "tp2": "40%"}.get(tp_name, "?")
+        close_pct = {"tp1": "50%", "tp2": "25%"}.get(tp_name, "?")
+        text = (
+            f"💰 <b>ТЕЙК-ПРОФИТ {tp_name.upper()} (+{tp_pct})</b>\n\n"
+            f"👤 {position.trader_name} | "
+            f"<code>{position.market_slug or position.token_id[:16]}</code>\n"
+            f"📈 Вход: {position.entry_price:.4f} → {position.current_price:.4f}\n"
+            f"✂️ Закрыто {close_pct} позиции\n"
+            f"🆔 <code>{position.order_id}</code>"
+        )
+        self.send(text)
+
+    def notify_time_stop(self, position: OpenPosition, reason: str):
+        """⏰ Временной стоп."""
+        reason_text = {
+            "no_movement": f"нет движения {config.TIME_STOP_NO_MOVEMENT_HOURS:.0f}ч",
+            "max_hold":    f"макс. удержание {config.MAX_HOLD_HOURS:.0f}ч",
+        }.get(reason, reason)
+        text = (
+            f"⏰ <b>ВРЕМЕННОЙ СТОП</b>\n\n"
+            f"👤 {position.trader_name} | "
+            f"<code>{position.market_slug or position.token_id[:16]}</code>\n"
+            f"⚠️ Причина: {reason_text}\n"
+            f"💰 Держали: {position.hours_held():.1f}ч | "
+            f"PnL: ${position.unrealized_pnl:.2f}\n"
+            f"🆔 <code>{position.order_id}</code>"
+        )
+        self.send(text)
+
+    def notify_trader_exit(self, position: OpenPosition):
+        """🔄 Трейдер-источник продал позицию."""
+        text = (
+            f"🔄 <b>ТРЕЙДЕР ВЫШЕЛ → закрываем</b>\n\n"
+            f"👤 {position.trader_name} продал "
+            f"<code>{position.market_slug or position.token_id[:16]}</code>\n"
+            f"💰 PnL: ${position.unrealized_pnl:.2f}\n"
+            f"🆔 <code>{position.order_id}</code>"
+        )
+        self.send(text)
+
     def notify_status(self, stats: dict, monitor_status: dict):
-        """📊 Периодический статус-отчёт."""
+        """📊 Периодический статус-отчёт v2.0 с дневными лимитами."""
         mode_tag = "🔒 DRY-RUN" if config.DRY_RUN else "💰 РЕАЛЬНЫЙ"
+        halt_tag = "🛑 ТОРГОВЛЯ ОСТАНОВЛЕНА" if stats.get("trading_halted") else "✅ Активен"
         traders_list = "\n".join(
-            f"  • {t['name']}: {t['total_detected']} сделок обнаружено"
+            f"  • {t['name']} [{t.get('role','?')}]: "
+            f"обнаружено={t['total_detected']} пропущено={t.get('total_skipped',0)}"
             for t in monitor_status.get("traders", [])
         )
         text = (
-            f"📊 <b>Статус бота</b> | {mode_tag}\n\n"
+            f"📊 <b>Статус бота</b> | {mode_tag}\n"
             f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            f"🤖 Статус: {halt_tag}\n\n"
             f"📈 <b>Сессия:</b>\n"
-            f"  • Скопировано сделок: {stats['total_copied']}\n"
-            f"  • Пропущено: {stats['total_skipped']}\n"
-            f"  • Открытых позиций: {stats['open_positions']}\n"
-            f"  • Закрытых позиций: {stats['closed_positions']}\n\n"
+            f"  • Скопировано: {stats['total_copied']} | Пропущено: {stats['total_skipped']}\n"
+            f"  • Открыто: {stats['open_positions']} | Закрыто: {stats['closed_positions']}\n\n"
             f"💰 <b>PnL:</b>\n"
             f"  • Нереализованный: ${stats['unrealized_pnl']:.2f}\n"
-            f"  • Реализованный: ${stats['realized_pnl']:.2f}\n"
-            f"  • Итого: ${stats['total_pnl']:.2f}\n\n"
+            f"  • Реализованный:   ${stats['realized_pnl']:.2f}\n"
+            f"  • Итого:           <b>${stats['total_pnl']:.2f}</b>\n\n"
+            f"🛡️ <b>Дневные лимиты:</b>\n"
+            f"  • Потери сегодня: ${abs(stats.get('daily_loss', 0)):.2f} / ${config.DAILY_LOSS_LIMIT_USD:.2f}\n"
+            f"  • Серия убытков:  {stats.get('daily_consecutive_losses', 0)} / {config.MAX_CONSECUTIVE_LOSSES}\n\n"
             f"👀 <b>Трейдеры:</b>\n{traders_list}\n\n"
-            f"🔄 Опросов всего: {monitor_status['total_polls']}"
+            f"🔄 Опросов: {monitor_status['total_polls']}"
         )
         self.send(text)
 
@@ -379,14 +443,20 @@ class PolymarketCopyBot:
         self.executor = OrderExecutor(
             risk_manager=self.risk_manager,
             on_trade_executed=self._on_trade_executed,
+            on_trade_skipped=self._on_trade_skipped,
             on_trade_failed=self._on_trade_failed,
             on_stop_loss_closed=self._on_stop_loss_closed,
+            on_take_profit_closed=self._on_take_profit_closed,
+            on_time_stop_closed=self._on_time_stop_closed,
+            on_trader_exit_closed=self._on_trader_exit_closed,
         )
 
         self.monitor_manager = MonitorManager(
             traders=config.TRADERS,
             shared_queue=self._trade_queue,
         )
+        # Передаём монитор в risk_manager для отслеживания sell-сигналов
+        self.risk_manager._monitor_manager = self.monitor_manager
 
         # Поток обработки очереди сделок
         self._worker_thread: Optional[threading.Thread] = None
@@ -522,18 +592,35 @@ class PolymarketCopyBot:
     # CALLBACKS ОТ EXECUTOR
     # ----------------------------------------------------------
 
-    def _on_trade_executed(self, position: OpenPosition):
-        """Вызывается при успешном исполнении ордера."""
-        self.notifier.notify_trade_copied(position, position.trader_name)
+    def _on_trade_executed(self, position: OpenPosition, activity: TradeActivity):
+        """✅ Сделка исполнена — отправляем SIGNAL карточку."""
+        self.notifier.notify_signal(position, activity)
+
+    def _on_trade_skipped(self, activity: TradeActivity, reason: str):
+        """⏭ Сделка пропущена."""
+        trader_name = getattr(activity, "trader_name", "unknown")
+        self.notifier.notify_trade_skipped(activity, reason, trader_name)
 
     def _on_trade_failed(self, activity: TradeActivity, error: str):
-        """Вызывается при ошибке исполнения ордера."""
+        """❌ Ошибка исполнения."""
         trader_name = getattr(activity, "trader_name", "unknown")
         self.notifier.notify_trade_error(activity, error, trader_name)
 
     def _on_stop_loss_closed(self, position: OpenPosition):
-        """Вызывается когда позиция закрыта по стоп-лоссу."""
+        """🚨 Стоп-лосс."""
         self.notifier.notify_stop_loss(position)
+
+    def _on_take_profit_closed(self, position: OpenPosition, tp_name: str):
+        """💰 Тейк-профит."""
+        self.notifier.notify_take_profit(position, tp_name)
+
+    def _on_time_stop_closed(self, position: OpenPosition, reason: str):
+        """⏰ Временной стоп."""
+        self.notifier.notify_time_stop(position, reason)
+
+    def _on_trader_exit_closed(self, position: OpenPosition):
+        """🔄 Трейдер-источник вышел."""
+        self.notifier.notify_trader_exit(position)
 
     # ----------------------------------------------------------
     # ПЕРИОДИЧЕСКИЙ СТАТУС
