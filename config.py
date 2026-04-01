@@ -52,9 +52,8 @@ TRADERS: list[dict] = [
         "entry_range": (0.50, 0.70),
     },
     {
-        # ⚠️ Замени REPLACE_WITH_REAL_ADDRESS на реальный кошелёк zeto82
         "name": "zeto82",
-        "address": os.getenv("ZETO82_ADDRESS", "REPLACE_WITH_REAL_ADDRESS"),
+        "address": "0xe2cafb64726ca135a74fcebf9af0ce07d4daa64",
         "role": "COPY",
         "strategy": "whitelist trader",
         "win_rate": 0.0,
@@ -62,9 +61,17 @@ TRADERS: list[dict] = [
         "entry_range": (0.20, 0.55),
     },
     {
-        # ⚠️ Замени REPLACE_WITH_REAL_ADDRESS на реальный кошелёк DenariusX
         "name": "DenariusX",
-        "address": os.getenv("DENARIUSX_ADDRESS", "REPLACE_WITH_REAL_ADDRESS"),
+        "address": "0x9ce7de90312489a01af6d4e8661b196c873f7cfa",
+        "role": "COPY",
+        "strategy": "whitelist trader",
+        "win_rate": 0.0,
+        "sharpe": 0.0,
+        "entry_range": (0.20, 0.55),
+    },
+    {
+        "name": "akirauva",
+        "address": "0xbea27864852ba214557d12203ecb459ca5b79214",
         "role": "COPY",
         "strategy": "whitelist trader",
         "win_rate": 0.0,
@@ -87,7 +94,7 @@ MODE: str = os.getenv("MODE", "SIGNAL_ONLY")
 # Только сделки этих трейдеров проходят в SIGNAL_ONLY режиме
 WHITELIST_TRADERS: list[str] = [
     name.strip()
-    for name in os.getenv("WHITELIST_TRADERS", "zeto82,DenariusX").split(",")
+    for name in os.getenv("WHITELIST_TRADERS", "zeto82,DenariusX,akirauva").split(",")
     if name.strip()
 ]
 
