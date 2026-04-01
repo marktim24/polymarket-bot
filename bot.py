@@ -10,6 +10,7 @@ bot.py — Главный модуль Polymarket Copy-Trading Bot v2.0.
 
 import sys
 import signal
+import json
 import logging
 import logging.handlers
 import threading
@@ -468,6 +469,11 @@ class PolymarketCopyBot:
         # Флаг запуска
         self._running = False
 
+        # ---- SIGNAL_ONLY: реестр активных сигналов ----
+        # signal_id → dict с данными сигнала
+        self._active_signals: dict[str, dict] = {}
+        self._signal_lock = threading.Lock()
+
     # ----------------------------------------------------------
     # LIFECYCLE
     # ----------------------------------------------------------
@@ -486,8 +492,11 @@ class PolymarketCopyBot:
         # Запускаем мониторинг трейдеров
         self.monitor_manager.start()
 
-        # Запускаем поток стоп-лосса
-        self.risk_manager.start_stop_loss_monitor()
+        # В SIGNAL_ONLY режиме стоп-лосс и executor НЕ запускаются
+        if config.MODE != "SIGNAL_ONLY":
+            self.risk_manager.start_stop_loss_monitor()
+        else:
+            self.logger.info("🔕 SIGNAL_ONLY: стоп-лосс и исполнение отключены")
 
         # Запускаем воркер очереди сделок
         self._stop_event.clear()
@@ -520,7 +529,8 @@ class PolymarketCopyBot:
 
         # Останавливаем компоненты
         self.monitor_manager.stop()
-        self.risk_manager.stop_stop_loss_monitor()
+        if config.MODE != "SIGNAL_ONLY":
+            self.risk_manager.stop_stop_loss_monitor()
 
         # Ждём завершения потоков
         if self._worker_thread:
@@ -561,7 +571,16 @@ class PolymarketCopyBot:
                 )
 
     def _handle_activity(self, activity: TradeActivity):
-        """Обрабатывает одну торговую активность."""
+        """
+        Роутер: направляет активность в нужный режим обработки.
+        SIGNAL_ONLY → _handle_signal_only()
+        LIVE        → валидация + исполнение (оригинальная логика)
+        """
+        if config.MODE == "SIGNAL_ONLY":
+            self._handle_signal_only(activity)
+            return
+
+        # ---- Оригинальная LIVE логика ----
         trader_name = getattr(activity, "trader_name", "unknown")
 
         self.logger.debug(
@@ -587,6 +606,131 @@ class PolymarketCopyBot:
 
         # Исполняем ордер
         self.executor.execute_trade(activity)
+
+    # ----------------------------------------------------------
+    # SIGNAL_ONLY ЛОГИКА
+    # ----------------------------------------------------------
+
+    def _handle_signal_only(self, activity: TradeActivity):
+        """
+        Обрабатывает сделку в режиме SIGNAL_ONLY.
+        Никакого исполнения — только фильтрация и вывод сигнала.
+
+        Фильтры (в порядке проверки):
+        1. Трейдер в WHITELIST_TRADERS
+        2. Цена в диапазоне MIN_ENTRY_PRICE – MAX_ENTRY_PRICE
+        3. Время до резолюции >= MIN_TIME_TO_RESOLUTION_HOURS
+        4. Возраст сделки <= 12 часов
+        5. Не превышен MAX_SIGNALS
+        """
+        trader_name = getattr(activity, "trader_name", "unknown")
+
+        # 1. Whitelist
+        if trader_name not in config.WHITELIST_TRADERS:
+            self.logger.info(
+                "IGNORE | trader=%s не в WHITELIST_TRADERS", trader_name
+            )
+            return
+
+        # 2. Цена
+        if activity.price < config.MIN_ENTRY_PRICE:
+            self.logger.info(
+                "IGNORE | price=%.4f < MIN=%.4f | trader=%s",
+                activity.price, config.MIN_ENTRY_PRICE, trader_name,
+            )
+            return
+        if activity.price > config.MAX_ENTRY_PRICE:
+            self.logger.info(
+                "IGNORE | price=%.4f > MAX=%.4f | trader=%s",
+                activity.price, config.MAX_ENTRY_PRICE, trader_name,
+            )
+            return
+
+        # 3. Время до резолюции
+        hours_left: Optional[float] = None
+        if activity.token_id:
+            hours_left = self.monitor_manager.market_checker.get_hours_to_resolution(
+                activity.token_id
+            )
+        if hours_left is not None and hours_left < config.MIN_TIME_TO_RESOLUTION_HOURS:
+            self.logger.info(
+                "IGNORE | time_to_resolution=%.1fh < %.0fh | trader=%s",
+                hours_left, config.MIN_TIME_TO_RESOLUTION_HOURS, trader_name,
+            )
+            return
+
+        # 4. Возраст сделки (резервная проверка — monitor уже фильтрует)
+        age = activity.age_hours()
+        if age > 12.0:
+            self.logger.info(
+                "IGNORE | сделка слишком старая (%.1fч) | trader=%s", age, trader_name
+            )
+            return
+
+        # 5. Лимит активных сигналов
+        with self._signal_lock:
+            if len(self._active_signals) >= config.MAX_SIGNALS:
+                self.logger.info(
+                    "IGNORE | MAX_SIGNALS=%d достигнут | trader=%s",
+                    config.MAX_SIGNALS, trader_name,
+                )
+                return
+            signal_id = activity.id or f"{trader_name}_{int(time.time())}"
+            self._active_signals[signal_id] = {
+                "market": activity.market_slug or activity.token_id[:20],
+                "side": activity.outcome or "YES",
+                "price": activity.price,
+                "trader": trader_name,
+                "token_id": activity.token_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        # Выводим сигнал
+        reason = "price in range + whitelisted trader"
+        if hours_left is not None:
+            reason += f" + {hours_left:.0f}h to resolution"
+
+        self._output_signal(activity, reason, hours_left)
+
+    def _output_signal(
+        self,
+        activity: TradeActivity,
+        reason: str,
+        hours_left: Optional[float] = None,
+    ):
+        """
+        Выводит сигнал в двух форматах:
+        1. JSON в консоль и лог
+        2. Telegram-сообщение
+        """
+        trader_name = getattr(activity, "trader_name", "unknown")
+
+        signal = {
+            "market": activity.market_slug or activity.token_id[:20],
+            "side": activity.outcome or "YES",
+            "price": round(activity.price, 4),
+            "trader": trader_name,
+            "decision": "BUY_CANDIDATE",
+            "reason": reason,
+        }
+
+        # Консоль + лог
+        signal_json = json.dumps(signal, ensure_ascii=False, indent=2)
+        print(signal_json)
+        self.logger.info("BUY_CANDIDATE | %s", json.dumps(signal, ensure_ascii=False))
+
+        # Telegram
+        hours_str = f"{hours_left:.0f}h" if hours_left is not None else "unknown"
+        text = (
+            f"🟢 <b>BUY_CANDIDATE</b>\n\n"
+            f"Market: <code>{signal['market']}</code>\n"
+            f"Side: {signal['side']}\n"
+            f"Price: {signal['price']}\n"
+            f"Trader: {trader_name}\n"
+            f"Time to resolution: {hours_str}\n"
+            f"Reason: {reason}"
+        )
+        self.notifier.send(text)
 
     # ----------------------------------------------------------
     # CALLBACKS ОТ EXECUTOR

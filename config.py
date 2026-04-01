@@ -51,10 +51,53 @@ TRADERS: list[dict] = [
         "sharpe": 4.13,
         "entry_range": (0.50, 0.70),
     },
+    {
+        # ⚠️ Замени REPLACE_WITH_REAL_ADDRESS на реальный кошелёк zeto82
+        "name": "zeto82",
+        "address": os.getenv("ZETO82_ADDRESS", "REPLACE_WITH_REAL_ADDRESS"),
+        "role": "COPY",
+        "strategy": "whitelist trader",
+        "win_rate": 0.0,
+        "sharpe": 0.0,
+        "entry_range": (0.20, 0.55),
+    },
+    {
+        # ⚠️ Замени REPLACE_WITH_REAL_ADDRESS на реальный кошелёк DenariusX
+        "name": "DenariusX",
+        "address": os.getenv("DENARIUSX_ADDRESS", "REPLACE_WITH_REAL_ADDRESS"),
+        "role": "COPY",
+        "strategy": "whitelist trader",
+        "win_rate": 0.0,
+        "sharpe": 0.0,
+        "entry_range": (0.20, 0.55),
+    },
 ]
 
 # Быстрый доступ: имя трейдера → роль
 TRADER_ROLES: dict[str, str] = {t["name"]: t["role"] for t in TRADERS}
+
+# ============================================================
+# SIGNAL-ONLY MODE
+# ============================================================
+
+# MODE = "SIGNAL_ONLY" → только вывод сигналов, нулевое исполнение
+# MODE = "LIVE"        → полный режим с реальными ордерами
+MODE: str = os.getenv("MODE", "SIGNAL_ONLY")
+
+# Только сделки этих трейдеров проходят в SIGNAL_ONLY режиме
+WHITELIST_TRADERS: list[str] = [
+    name.strip()
+    for name in os.getenv("WHITELIST_TRADERS", "zeto82,DenariusX").split(",")
+    if name.strip()
+]
+
+# Максимум активных сигналов одновременно
+MAX_SIGNALS: int = int(os.getenv("MAX_SIGNALS", "3"))
+
+# Минимальное время до резолюции рынка для прохождения фильтра (часы)
+MIN_TIME_TO_RESOLUTION_HOURS: float = float(
+    os.getenv("MIN_TIME_TO_RESOLUTION_HOURS", "72.0")
+)
 
 # ============================================================
 # КЛАССИФИКАЦИЯ СИГНАЛОВ
