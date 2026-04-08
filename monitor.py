@@ -140,7 +140,7 @@ class SignalClassifier:
         activity: TradeActivity,
     ) -> tuple[str, str, float]:
         """
-        Классифицирует сигнал.
+        Классифицирует сигнал. Использует per-trader price overrides.
 
         Returns:
             (signal_type, reason, confidence)
@@ -149,11 +149,23 @@ class SignalClassifier:
         price = activity.price
         token_id = activity.token_id
 
-        # ---- Проверка 1: диапазон цены ----
-        if price > config.SIGNAL_HIGH_MAX_PRICE:
-            return "IGNORE", f"цена {price:.3f} выше максимума {config.SIGNAL_HIGH_MAX_PRICE}", 0.0
-        if price < config.SIGNAL_HIGH_MIN_PRICE:
-            return "IGNORE", f"цена {price:.3f} ниже минимума {config.SIGNAL_HIGH_MIN_PRICE}", 0.0
+        # Per-trader price bounds (fallback на глобальные)
+        high_min = config.get_trader_config(trader_name, "MIN_ENTRY_PRICE", config.SIGNAL_HIGH_MIN_PRICE)
+        high_max = config.get_trader_config(trader_name, "MAX_ENTRY_PRICE", config.SIGNAL_HIGH_MAX_PRICE)
+
+        # ---- Проверка 1: диапазон цены (per-trader) ----
+        if price > high_max:
+            return "IGNORE", f"цена {price:.3f} выше максимума {high_max}", 0.0
+        if price < high_min:
+            return "IGNORE", f"цена {price:.3f} ниже минимума {high_min}", 0.0
+
+        # ---- Проверка 1b: пропуск крипто micro-рынков (per-trader) ----
+        if config.get_trader_config(trader_name, "SKIP_CRYPTO_MICRO", False):
+            slug = (activity.market_slug or "").lower()
+            crypto_keywords = ["btc", "bitcoin", "eth", "ethereum", "sol", "solana",
+                               "crypto", "5-min", "5min", "1-min", "1min", "hourly"]
+            if any(kw in slug for kw in crypto_keywords):
+                return "IGNORE", f"крипто micro-market: {slug[:40]}", 0.0
 
         # ---- Проверка 2: время до резолюции ----
         hours_left = self._market_checker.get_hours_to_resolution(token_id)
@@ -164,12 +176,13 @@ class SignalClassifier:
                 0.0,
             )
 
-        # ---- Проверка 3: ликвидность ----
+        # ---- Проверка 3: ликвидность (per-trader) ----
+        min_liq = config.get_trader_config(trader_name, "MIN_MARKET_VOLUME_USD", config.MIN_LIQUIDITY_USD)
         liquidity = self._market_checker.get_liquidity(token_id)
-        if liquidity is not None and liquidity < config.MIN_LIQUIDITY_USD:
+        if liquidity is not None and liquidity < min_liq:
             return (
                 "IGNORE",
-                f"низкая ликвидность ${liquidity:.0f} < ${config.MIN_LIQUIDITY_USD:.0f}",
+                f"низкая ликвидность ${liquidity:.0f} < ${min_liq:.0f}",
                 0.0,
             )
 
@@ -189,8 +202,8 @@ class SignalClassifier:
         # ---- Классификация ----
         confidence_score = 0.0
 
-        # Базовый балл от ценового диапазона HIGH
-        if config.SIGNAL_HIGH_MIN_PRICE <= price <= config.SIGNAL_HIGH_MAX_PRICE:
+        # Базовый балл — цена внутри допустимого диапазона трейдера
+        if high_min <= price <= high_max:
             confidence_score += 0.30
 
         # Бонус за время до резолюции
@@ -200,9 +213,9 @@ class SignalClassifier:
             confidence_score += 0.10
 
         # Бонус за ликвидность
-        if liquidity is None or liquidity >= config.MIN_LIQUIDITY_USD * 3:
+        if liquidity is None or liquidity >= min_liq * 3:
             confidence_score += 0.20
-        elif liquidity >= config.MIN_LIQUIDITY_USD:
+        elif liquidity >= min_liq:
             confidence_score += 0.10
 
         # Бонус за confluence
@@ -214,17 +227,17 @@ class SignalClassifier:
             )
             return "HIGH", reason, min(confidence_score, 1.0)
 
-        # MEDIUM: один трейдер, цена в MEDIUM диапазоне
-        if config.SIGNAL_MEDIUM_MIN_PRICE <= price <= config.SIGNAL_MEDIUM_MAX_PRICE:
+        # MEDIUM: один трейдер, цена в допустимом диапазоне
+        if high_min <= price <= high_max:
             reason = (
                 f"трейдер={trader_name} | цена={price:.3f} | "
                 f"liquidity=${liquidity or 0:.0f}"
             )
             return "MEDIUM", reason, min(confidence_score, 1.0)
 
-        # Цена в HIGH диапазоне но нет confluence → MEDIUM с низким confidence
+        # Цена вне основного диапазона — MEDIUM с низким confidence
         reason = (
-            f"трейдер={trader_name} | цена={price:.3f} выше MEDIUM диапазона, нет подтверждения"
+            f"трейдер={trader_name} | цена={price:.3f} вне диапазона, нет подтверждения"
         )
         return "MEDIUM", reason, min(confidence_score * 0.5, 1.0)
 
@@ -489,12 +502,13 @@ class TraderMonitor:
             if not activity.is_valid_buy():
                 continue
 
-            # --- Фильтр 1: возраст сигнала ---
+            # --- Фильтр 1: возраст сигнала (per-trader max copy delay) ---
+            max_age = config.get_trader_config(self.name, "MAX_COPY_DELAY_HOURS", config.MAX_SIGNAL_AGE_HOURS)
             age = activity.age_hours()
-            if age > config.MAX_SIGNAL_AGE_HOURS:
+            if age > max_age:
                 logger.debug(
                     "[%s] Пропуск: сделка слишком старая (%.1fч > %.1fч)",
-                    self.name, age, config.MAX_SIGNAL_AGE_HOURS
+                    self.name, age, max_age
                 )
                 self.total_skipped += 1
                 continue

@@ -114,9 +114,9 @@ class OrderExecutor:
                 self.on_trade_skipped(activity, skip_reason)
             return None
 
-        # Размер определяется signal_type
+        # Размер определяется signal_type + trader overrides
         position_size_usd = self.risk_manager.calculate_position_size(
-            activity.signal_type
+            activity.signal_type, trader_name
         )
         shares = self.risk_manager.calculate_shares(position_size_usd, activity.price)
 

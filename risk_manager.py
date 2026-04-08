@@ -279,10 +279,12 @@ class RiskManager:
     ) -> tuple[bool, str]:
         """
         Проверяет сделку на соответствие всем параметрам риска.
+        Использует per-trader overrides через config.get_trader_config().
 
         Returns: (True, "") или (False, причина_отказа)
         """
         self._ensure_daily_stats()
+        trader = activity.trader_name
 
         # 1. Торговля не приостановлена
         if self._daily.trading_halted:
@@ -300,18 +302,36 @@ class RiskManager:
         if activity.signal_type == "IGNORE":
             return False, SkipReason.SIGNAL_IGNORE.format(activity.signal_reason)
 
-        # 5. Диапазон цены
-        if activity.price < config.MIN_ENTRY_PRICE:
-            return False, SkipReason.PRICE_TOO_LOW.format(
-                activity.price, config.MIN_ENTRY_PRICE
-            )
-        if activity.price > config.MAX_ENTRY_PRICE:
-            return False, SkipReason.PRICE_TOO_HIGH.format(
-                activity.price, config.MAX_ENTRY_PRICE
-            )
+        # 5. Диапазон цены (per-trader)
+        min_price = config.get_trader_config(trader, "MIN_ENTRY_PRICE")
+        max_price = config.get_trader_config(trader, "MAX_ENTRY_PRICE")
+        if activity.price < min_price:
+            return False, SkipReason.PRICE_TOO_LOW.format(activity.price, min_price)
+        if activity.price > max_price:
+            return False, SkipReason.PRICE_TOO_HIGH.format(activity.price, max_price)
 
-        # 6. Размер позиции после расчёта
-        position_size = self.calculate_position_size(activity.signal_type)
+        # 5b. Минимальный размер позиции трейдера (per-trader)
+        min_trader_size = config.get_trader_config(trader, "MIN_TRADER_SIZE_USD", 0.0)
+        if min_trader_size > 0 and activity.size_usd < min_trader_size:
+            return False, f"микро-позиция трейдера ${activity.size_usd:.2f} < ${min_trader_size:.2f}"
+
+        # 5c. Максимальная задержка копирования (per-trader)
+        max_delay = config.get_trader_config(trader, "MAX_COPY_DELAY_HOURS", config.MAX_SIGNAL_AGE_HOURS)
+        age = activity.age_hours()
+        if age > max_delay:
+            return False, f"задержка {age:.1f}ч > макс. {max_delay:.1f}ч для {trader}"
+
+        # 5d. Проверка соотношения текущей цены к входу трейдера (per-trader)
+        max_ratio = config.get_trader_config(trader, "MAX_PRICE_RATIO_VS_ENTRY", 0.0)
+        if max_ratio > 0 and activity.token_id and market_checker:
+            current = market_checker.get_current_price(activity.token_id)
+            if current is not None and activity.price > 0:
+                ratio = current / activity.price
+                if ratio > max_ratio:
+                    return False, f"цена уже {ratio:.1f}x от входа трейдера (макс. {max_ratio:.1f}x)"
+
+        # 6. Размер позиции после расчёта (per-trader)
+        position_size = self.calculate_position_size(activity.signal_type, trader)
         if position_size < config.MIN_COPY_SIZE_USD:
             return False, SkipReason.SIZE_TOO_SMALL.format(
                 position_size, config.MIN_COPY_SIZE_USD
@@ -355,15 +375,18 @@ class RiskManager:
 
         return True, ""
 
-    def calculate_position_size(self, signal_type: str) -> float:
+    def calculate_position_size(self, signal_type: str, trader_name: str = "") -> float:
         """
-        Рассчитывает размер позиции по типу сигнала.
+        Рассчитывает размер позиции по типу сигнала и трейдеру.
         При просадке >20% размер снижается вдвое.
         """
+        high = config.get_trader_config(trader_name, "HIGH_POSITION_USD", config.HIGH_POSITION_USD)
+        medium = config.get_trader_config(trader_name, "MEDIUM_POSITION_USD", config.MEDIUM_POSITION_USD)
+        base_default = config.get_trader_config(trader_name, "BASE_POSITION_USD", config.BASE_POSITION_USD)
         base = {
-            "HIGH":   config.HIGH_POSITION_USD,
-            "MEDIUM": config.MEDIUM_POSITION_USD,
-        }.get(signal_type, config.BASE_POSITION_USD)
+            "HIGH":   high,
+            "MEDIUM": medium,
+        }.get(signal_type, base_default)
 
         # Проверка просадки
         if self._session_start_balance > 0:
@@ -532,20 +555,38 @@ class RiskManager:
             self._stop_event.wait(timeout=config.STOP_LOSS_CHECK_INTERVAL_SEC)
 
     def _check_exits_for_position(self, pos: OpenPosition):
-        """Проверяет все условия выхода для одной позиции."""
+        """Проверяет все условия выхода для одной позиции (per-trader)."""
+        trader = pos.trader_name
+
+        # Загружаем per-trader параметры выхода
+        sl_pct = config.get_trader_config(trader, "STOP_LOSS_PERCENT", config.STOP_LOSS_PERCENT)
+        tp1_pct = config.get_trader_config(trader, "TAKE_PROFIT_1_PCT", config.TAKE_PROFIT_1_PCT)
+        tp2_pct = config.get_trader_config(trader, "TAKE_PROFIT_2_PCT", config.TAKE_PROFIT_2_PCT)
+        tp1_ratio = config.get_trader_config(trader, "TAKE_PROFIT_1_CLOSE_RATIO", config.TAKE_PROFIT_1_CLOSE_RATIO)
+        tp2_ratio = config.get_trader_config(trader, "TAKE_PROFIT_2_CLOSE_RATIO", config.TAKE_PROFIT_2_CLOSE_RATIO)
+        no_move_hours = config.get_trader_config(trader, "TIME_STOP_NO_MOVEMENT_HOURS", config.TIME_STOP_NO_MOVEMENT_HOURS)
+        max_hold = config.get_trader_config(trader, "MAX_HOLD_HOURS", config.MAX_HOLD_HOURS)
+        min_exit_size = config.get_trader_config(trader, "MIN_TRADER_EXIT_SIZE_USD", 0.0)
 
         # --- 0. Проверка sell-сигнала от трейдера-источника ---
         if self._monitor_manager:
             sellers = self._monitor_manager.get_sell_signals_for_token(pos.token_id)
             if pos.trader_name in sellers:
-                logger.info(
-                    "🔄 Трейдер %s продал %s → закрываем позицию",
-                    pos.trader_name, pos.order_id[:16],
-                )
-                self._monitor_manager.clear_sell_signal(pos.token_id)
-                if self._on_trader_exit:
-                    self._on_trader_exit(pos)
-                return  # Не проверяем остальные условия
+                # Для WizzleGizzle: игнорировать мелкие exit'ы трейдера
+                if min_exit_size > 0 and pos.size_usd < min_exit_size:
+                    logger.debug(
+                        "🔄 Игнорируем sell %s: позиция $%.2f < мин. $%.2f",
+                        pos.order_id[:16], pos.size_usd, min_exit_size,
+                    )
+                else:
+                    logger.info(
+                        "🔄 Трейдер %s продал %s → закрываем позицию",
+                        pos.trader_name, pos.order_id[:16],
+                    )
+                    self._monitor_manager.clear_sell_signal(pos.token_id)
+                    if self._on_trader_exit:
+                        self._on_trader_exit(pos)
+                    return
 
         # --- Получаем текущую цену ---
         current_price = self._fetch_current_price(pos.token_id)
@@ -554,55 +595,57 @@ class RiskManager:
 
         pos.update_pnl(current_price)
 
-        # --- 1. Стоп-лосс ---
-        if pos.is_stop_loss_triggered():
+        # --- 1. Стоп-лосс (per-trader: для WizzleGizzle — $0.001 floor) ---
+        if current_price > 0 and current_price < pos.entry_price * sl_pct:
             logger.warning(
-                "🚨 СТОП-ЛОСС %s: %.4f < %.4f (вход=%.4f)",
+                "🚨 СТОП-ЛОСС %s: %.4f < %.4f (вход=%.4f, SL=%.3f)",
                 pos.order_id[:16], current_price,
-                pos.entry_price * config.STOP_LOSS_PERCENT,
-                pos.entry_price,
+                pos.entry_price * sl_pct, pos.entry_price, sl_pct,
             )
             if self._on_stop_loss:
                 self._on_stop_loss(pos)
             return
 
-        # --- 2. Тейк-профит 2 (+40% → закрыть 25%) ---
-        if pos.is_tp2_due():
+        # --- 2. Тейк-профит 2 (per-trader) ---
+        if not pos.tp2_triggered and pos.pnl_pct() >= tp2_pct:
             logger.info(
-                "💰 TP2 (+40%%) %s: цена=%.4f | закрываем 25%%",
-                pos.order_id[:16], current_price,
+                "💰 TP2 (+%.0f%%) %s: цена=%.4f | закрываем %.0f%%",
+                tp2_pct * 100, pos.order_id[:16], current_price, tp2_ratio * 100,
             )
             pos.tp2_triggered = True
             if self._on_take_profit:
-                self._on_take_profit(pos, config.TAKE_PROFIT_2_CLOSE_RATIO, "tp2")
+                self._on_take_profit(pos, tp2_ratio, "tp2")
             return
 
-        # --- 3. Тейк-профит 1 (+20% → закрыть 50%) ---
-        if pos.is_tp1_due():
+        # --- 3. Тейк-профит 1 (per-trader) ---
+        if not pos.tp1_triggered and pos.pnl_pct() >= tp1_pct:
             logger.info(
-                "💰 TP1 (+20%%) %s: цена=%.4f | закрываем 50%%",
-                pos.order_id[:16], current_price,
+                "💰 TP1 (+%.0f%%) %s: цена=%.4f | закрываем %.0f%%",
+                tp1_pct * 100, pos.order_id[:16], current_price, tp1_ratio * 100,
             )
             pos.tp1_triggered = True
             if self._on_take_profit:
-                self._on_take_profit(pos, config.TAKE_PROFIT_1_CLOSE_RATIO, "tp1")
-            # Не return — продолжаем держать остаток
+                self._on_take_profit(pos, tp1_ratio, "tp1")
 
-        # --- 4. Временной стоп: нет движения 24ч ---
-        if pos.is_time_stop_no_movement():
+        # --- 4. Временной стоп: нет движения (per-trader) ---
+        elapsed_no_move = (
+            datetime.now(timezone.utc) - pos.last_significant_price_change
+        ).total_seconds() / 3600.0
+        if elapsed_no_move >= no_move_hours:
             logger.info(
                 "⏰ TIME-STOP (нет движения %.0fч) %s",
-                config.TIME_STOP_NO_MOVEMENT_HOURS, pos.order_id[:16],
+                no_move_hours, pos.order_id[:16],
             )
             if self._on_time_stop:
                 self._on_time_stop(pos, "no_movement")
             return
 
-        # --- 5. Временной стоп: максимальное время удержания ---
-        if pos.is_max_hold_exceeded():
+        # --- 5. Временной стоп: макс. удержание (per-trader) ---
+        hours_held = pos.hours_held()
+        if hours_held >= max_hold:
             logger.info(
                 "⏰ TIME-STOP (макс. удержание %.0fч) %s",
-                config.MAX_HOLD_HOURS, pos.order_id[:16],
+                max_hold, pos.order_id[:16],
             )
             if self._on_time_stop:
                 self._on_time_stop(pos, "max_hold")

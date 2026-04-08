@@ -42,10 +42,105 @@ TRADERS: list[dict] = [
         "sharpe": 4.13,
         "entry_range": (0.55, 0.65),
     },
+    {
+        "name": "WizzleGizzle",
+        "address": "0xcacf2bf1906bb3c74a0e0453bfb91f1374e335ff",
+        "role": "COPY",
+        "strategy": "long-shot: sports, politics, music, weather (hold to resolution)",
+        "win_rate": 0.0,   # не подтверждён — фильтр по edge, не WR
+        "sharpe": 0.0,
+        "entry_range": (0.02, 0.15),
+        # ---- Per-trader overrides ----
+        "overrides": {
+            # Фильтры входа
+            "MIN_ENTRY_PRICE": 0.02,
+            "MAX_ENTRY_PRICE": 0.15,
+            "MIN_TRADER_SIZE_USD": 0.50,      # пропускать микро-позиции < $0.50
+            "MAX_COPY_DELAY_HOURS": 1.0,       # копировать в течение 1 часа
+            "MAX_PRICE_RATIO_VS_ENTRY": 2.0,   # не копировать если цена уже 2x от входа трейдера
+            "MIN_MARKET_VOLUME_USD": 1000.0,   # мин. ликвидность рынка
+            "SKIP_CRYPTO_MICRO": True,          # пропускать BTC/ETH/SOL micro-timeframe
+            "SKIP_CATEGORIES": [],              # пустой = ничего не пропускаем кроме crypto micro
+            "COPY_CATEGORIES": ["sports", "politics", "music", "weather", "culture", "science"],
+            # Размер позиции (маленький — high-risk long-shot)
+            "HIGH_POSITION_USD": 2.0,
+            "MEDIUM_POSITION_USD": 1.5,
+            "BASE_POSITION_USD": 1.0,
+            # Бонус для спорта (гипотеза: лучший edge)
+            "SPORTS_SIZE_MULTIPLIER": 1.5,
+            # Логика выхода — hold to resolution
+            "STOP_LOSS_PERCENT": 0.001,         # выход если позиция упала до $0.001
+            "TAKE_PROFIT_1_PCT": 5.0,           # TP1 при 5x (+400%)
+            "TAKE_PROFIT_2_PCT": 10.0,          # TP2 при 10x (+900%)
+            "TAKE_PROFIT_1_CLOSE_RATIO": 0.50,
+            "TAKE_PROFIT_2_CLOSE_RATIO": 0.50,
+            "TIME_STOP_NO_MOVEMENT_HOURS": 2160.0,   # 90 дней
+            "MAX_HOLD_HOURS": 4320.0,                 # 180 дней
+            # Выход по sell трейдера — только если оригинальная позиция > $1.00
+            "MIN_TRADER_EXIT_SIZE_USD": 1.0,
+        },
+    },
+    {
+        "name": "gatorr",
+        "address": "0x93abbc022ce98d6f45d4444b594791cc4b7a9723",
+        "role": "COPY",
+        "strategy": "NBA + NHL: moneyline + O/U totals",
+        "win_rate": 0.66,
+        "sharpe": 0.0,
+        "entry_range": (0.44, 0.52),
+        # ---- Per-trader overrides ----
+        "overrides": {
+            # Фильтры входа — узкий "value zone" 0.44-0.52
+            # Его средняя: ML=0.462, O/U=0.507. Диапазон 0.44-0.52 покрывает ядро
+            "MIN_ENTRY_PRICE": 0.44,
+            "MAX_ENTRY_PRICE": 0.52,
+            # Минимум $1 — пропускаем микро-ставки <$1
+            "MIN_TRADER_SIZE_USD": 1.0,
+            # Копировать в течение 30 мин (спортивные рынки быстро двигаются)
+            "MAX_COPY_DELAY_HOURS": 0.5,
+            # Не копировать если цена ушла >20% от входа трейдера
+            "MAX_PRICE_RATIO_VS_ENTRY": 1.20,
+            # Размер позиции (умеренный — высокий WR, средний payoff)
+            "HIGH_POSITION_USD": 5.0,
+            "MEDIUM_POSITION_USD": 3.0,
+            "BASE_POSITION_USD": 2.0,
+            # Стоп-лосс: 30% падение (спорт = resolved быстро, SL мягче)
+            "STOP_LOSS_PERCENT": 0.70,
+            # Тейк-профит: спорт resolved в 0 или 1, TP редко срабатывает до резолюции
+            "TAKE_PROFIT_1_PCT": 0.30,       # +30%
+            "TAKE_PROFIT_2_PCT": 0.60,       # +60%
+            "TAKE_PROFIT_1_CLOSE_RATIO": 0.50,
+            "TAKE_PROFIT_2_CLOSE_RATIO": 0.50,
+            # Спорт-события резолвятся быстро — макс. 48 часов
+            "MAX_HOLD_HOURS": 48.0,
+            "TIME_STOP_NO_MOVEMENT_HOURS": 24.0,
+        },
+    },
 ]
 
 # Быстрый доступ: имя трейдера → роль
 TRADER_ROLES: dict[str, str] = {t["name"]: t["role"] for t in TRADERS}
+
+# Быстрый доступ: имя трейдера → dict конфигурации
+_TRADER_BY_NAME: dict[str, dict] = {t["name"]: t for t in TRADERS}
+
+
+def get_trader_config(trader_name: str, param: str, default=None):
+    """
+    Возвращает значение параметра для трейдера:
+    сначала ищет в overrides трейдера, затем в глобальном config.
+
+    Пример: get_trader_config("WizzleGizzle", "MAX_HOLD_HOURS") → 4320.0
+             get_trader_config("sayber", "MAX_HOLD_HOURS") → 72.0 (глобальное)
+    """
+    trader = _TRADER_BY_NAME.get(trader_name)
+    if trader:
+        overrides = trader.get("overrides", {})
+        if param in overrides:
+            return overrides[param]
+    # Fallback на глобальное значение
+    val = globals().get(param, default)
+    return val if val is not None else default
 
 # ============================================================
 # SIGNAL-ONLY MODE
@@ -61,7 +156,7 @@ VIRTUAL_DEPOSIT_USD: float = float(os.getenv("VIRTUAL_DEPOSIT_USD", "100.0"))
 # Только сделки этих трейдеров проходят в SIGNAL_ONLY режиме
 WHITELIST_TRADERS: list[str] = [
     name.strip()
-    for name in os.getenv("WHITELIST_TRADERS", "sayber").split(",")
+    for name in os.getenv("WHITELIST_TRADERS", "sayber,WizzleGizzle,gatorr").split(",")
     if name.strip()
 ]
 
@@ -132,11 +227,11 @@ MIN_COPY_SIZE_USD: float = float(os.getenv("MIN_COPY_SIZE_USD", "1.0"))
 # ЛИМИТЫ ПОРТФЕЛЯ
 # ============================================================
 
-# Максимум одновременных открытых позиций (снижено с 20 до 3)
-MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
+# Максимум одновременных открытых позиций (увеличено для 2 трейдеров: sayber + WizzleGizzle long-hold)
+MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "15"))
 
 # Максимальная суммарная экспозиция в USDC
-MAX_TOTAL_EXPOSURE_USD: float = float(os.getenv("MAX_TOTAL_EXPOSURE_USD", "20.0"))
+MAX_TOTAL_EXPOSURE_USD: float = float(os.getenv("MAX_TOTAL_EXPOSURE_USD", "50.0"))
 
 # ============================================================
 # ПАРАМЕТРЫ РИСКА
