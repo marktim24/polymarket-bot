@@ -34,49 +34,13 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 TRADERS: list[dict] = [
     {
-        "name": "lebronjames23",
-        "address": "0xa1b3fa26d16c11b222f6785851981c2f560b0329",
-        "role": "COPY",
-        "strategy": "спорт + киберспорт",
-        "win_rate": 0.80,
-        "sharpe": 0.68,
-        "entry_range": (0.08, 0.48),
-    },
-    {
         "name": "sayber",
         "address": "0x96b41aac95788f717d0566210cda48e8e686c2f1",
         "role": "COPY",
         "strategy": "политика + спорт + крипто",
         "win_rate": 0.88,
         "sharpe": 4.13,
-        "entry_range": (0.50, 0.70),
-    },
-    {
-        "name": "zeto82",
-        "address": "0xe2cafb64726ca135a74fcebf9af0ce07d4daa64",
-        "role": "COPY",
-        "strategy": "whitelist trader",
-        "win_rate": 0.0,
-        "sharpe": 0.0,
-        "entry_range": (0.20, 0.55),
-    },
-    {
-        "name": "DenariusX",
-        "address": "0x9ce7de90312489a01af6d4e8661b196c873f7cfa",
-        "role": "COPY",
-        "strategy": "whitelist trader",
-        "win_rate": 0.0,
-        "sharpe": 0.0,
-        "entry_range": (0.20, 0.55),
-    },
-    {
-        "name": "akirauva",
-        "address": "0xbea27864852ba214557d12203ecb459ca5b79214",
-        "role": "COPY",
-        "strategy": "whitelist trader",
-        "win_rate": 0.0,
-        "sharpe": 0.0,
-        "entry_range": (0.20, 0.55),
+        "entry_range": (0.55, 0.65),
     },
 ]
 
@@ -89,12 +53,15 @@ TRADER_ROLES: dict[str, str] = {t["name"]: t["role"] for t in TRADERS}
 
 # MODE = "SIGNAL_ONLY" → только вывод сигналов, нулевое исполнение
 # MODE = "LIVE"        → полный режим с реальными ордерами
-MODE: str = os.getenv("MODE", "SIGNAL_ONLY")
+MODE: str = os.getenv("MODE", "LIVE")
+
+# Виртуальный депозит для DRY_RUN режима (USD)
+VIRTUAL_DEPOSIT_USD: float = float(os.getenv("VIRTUAL_DEPOSIT_USD", "100.0"))
 
 # Только сделки этих трейдеров проходят в SIGNAL_ONLY режиме
 WHITELIST_TRADERS: list[str] = [
     name.strip()
-    for name in os.getenv("WHITELIST_TRADERS", "zeto82,DenariusX,akirauva").split(",")
+    for name in os.getenv("WHITELIST_TRADERS", "sayber").split(",")
     if name.strip()
 ]
 
@@ -111,12 +78,12 @@ MIN_TIME_TO_RESOLUTION_HOURS: float = float(
 # ============================================================
 
 # HIGH сигнал: оба трейдера COPY + подтверждение
-SIGNAL_HIGH_MIN_PRICE: float = 0.20
-SIGNAL_HIGH_MAX_PRICE: float = 0.55
+SIGNAL_HIGH_MIN_PRICE: float = 0.55
+SIGNAL_HIGH_MAX_PRICE: float = 0.65
 
 # MEDIUM сигнал: один COPY трейдер
-SIGNAL_MEDIUM_MIN_PRICE: float = 0.20
-SIGNAL_MEDIUM_MAX_PRICE: float = 0.45
+SIGNAL_MEDIUM_MIN_PRICE: float = 0.55
+SIGNAL_MEDIUM_MAX_PRICE: float = 0.65
 
 # Окно времени для confluence (часы) — сколько держать буфер предыдущих сделок
 SIGNAL_CONFLUENCE_WINDOW_HOURS: float = 1.0
@@ -132,8 +99,8 @@ MIN_MARKET_RESOLUTION_HOURS: float = float(os.getenv("MIN_MARKET_RESOLUTION_HOUR
 # ============================================================
 
 # Диапазон допустимых цен входа (обновлён с 0.05–0.70 на 0.20–0.55)
-MIN_ENTRY_PRICE: float = float(os.getenv("MIN_ENTRY_PRICE", "0.20"))
-MAX_ENTRY_PRICE: float = float(os.getenv("MAX_ENTRY_PRICE", "0.55"))
+MIN_ENTRY_PRICE: float = float(os.getenv("MIN_ENTRY_PRICE", "0.55"))
+MAX_ENTRY_PRICE: float = float(os.getenv("MAX_ENTRY_PRICE", "0.65"))
 
 # Максимальный возраст сигнала — сделки старше этого игнорируются
 MAX_SIGNAL_AGE_HOURS: float = float(os.getenv("MAX_SIGNAL_AGE_HOURS", "12.0"))
@@ -220,7 +187,7 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE: str = "logs/bot.log"
 LOG_MAX_BYTES: int = 5 * 1024 * 1024
 LOG_BACKUP_COUNT: int = 3
-STATUS_INTERVAL_HOURS: int = 6
+STATUS_INTERVAL_HOURS: int = int(os.getenv("STATUS_INTERVAL_HOURS", "1"))
 
 # ============================================================
 # СЕТЕВЫЕ НАСТРОЙКИ

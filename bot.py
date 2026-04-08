@@ -25,6 +25,7 @@ import config
 from monitor import MonitorManager, TradeActivity
 from risk_manager import RiskManager, OpenPosition
 from executor import OrderExecutor
+from dashboard import run_dashboard
 
 
 # ============================================================
@@ -139,6 +140,7 @@ class TelegramNotifier:
         self,
         position: OpenPosition,
         activity: TradeActivity,
+        balance: float = 0.0,
     ):
         """
         📡 SIGNAL карточка — основной формат уведомления v2.0.
@@ -157,6 +159,10 @@ class TelegramNotifier:
 
         signal_emoji = {"HIGH": "🔥", "MEDIUM": "📊"}.get(position.signal_type, "📋")
 
+        balance_line = ""
+        if config.DRY_RUN:
+            balance_line = f"\n💼 <b>Баланс:</b>      ${balance:.2f}"
+
         text = (
             f"{signal_emoji} <b>SIGNAL: {position.signal_type}</b> | {mode_tag}\n\n"
             f"<b>Type:</b>          {position.signal_type}\n"
@@ -166,7 +172,8 @@ class TelegramNotifier:
             f"<b>Entry Price:</b>   {position.entry_price:.4f}\n"
             f"<b>Position Size:</b> ${position.size_usd:.2f}\n"
             f"<b>Confidence:</b>    {activity.confidence * 100:.0f}%\n"
-            f"<b>Reason:</b>        {activity.signal_reason or '—'}\n\n"
+            f"<b>Reason:</b>        {activity.signal_reason or '—'}"
+            f"{balance_line}\n\n"
             f"🆔 <code>{position.order_id}</code> | "
             f"🕒 {position.opened_at.strftime('%H:%M UTC')}"
         )
@@ -254,6 +261,23 @@ class TelegramNotifier:
             f"обнаружено={t['total_detected']} пропущено={t.get('total_skipped',0)}"
             for t in monitor_status.get("traders", [])
         )
+
+        # Блок виртуального депозита (только DRY_RUN)
+        deposit_block = ""
+        if config.DRY_RUN:
+            initial = stats.get('initial_deposit', 0)
+            equity = stats.get('virtual_equity', 0)
+            free = stats.get('virtual_balance', 0)
+            roi = ((equity - initial) / initial * 100) if initial > 0 else 0
+            roi_emoji = "📈" if roi >= 0 else "📉"
+            deposit_block = (
+                f"\n💼 <b>Виртуальный депозит:</b>\n"
+                f"  • Начальный: ${initial:.2f}\n"
+                f"  • Свободно:  ${free:.2f}\n"
+                f"  • Эквити:    <b>${equity:.2f}</b>\n"
+                f"  • ROI:       {roi_emoji} {roi:+.1f}%\n"
+            )
+
         text = (
             f"📊 <b>Статус бота</b> | {mode_tag}\n"
             f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
@@ -264,7 +288,8 @@ class TelegramNotifier:
             f"💰 <b>PnL:</b>\n"
             f"  • Нереализованный: ${stats['unrealized_pnl']:.2f}\n"
             f"  • Реализованный:   ${stats['realized_pnl']:.2f}\n"
-            f"  • Итого:           <b>${stats['total_pnl']:.2f}</b>\n\n"
+            f"  • Итого:           <b>${stats['total_pnl']:.2f}</b>\n"
+            f"{deposit_block}\n"
             f"🛡️ <b>Дневные лимиты:</b>\n"
             f"  • Потери сегодня: ${abs(stats.get('daily_loss', 0)):.2f} / ${config.DAILY_LOSS_LIMIT_USD:.2f}\n"
             f"  • Серия убытков:  {stats.get('daily_consecutive_losses', 0)} / {config.MAX_CONSECUTIVE_LOSSES}\n\n"
@@ -286,14 +311,19 @@ class TelegramNotifier:
                 f"  • {w}" for w in warnings
             )
 
+        # Виртуальный депозит для DRY_RUN
+        balance_line = f"💳 Баланс: ${wallet_balance:.2f} USDC"
+        if config.DRY_RUN:
+            balance_line = f"💼 Виртуальный депозит: <b>${config.VIRTUAL_DEPOSIT_USD:.2f}</b>"
+
         text = (
             f"🚀 <b>Polymarket Copy-Bot запущен!</b>\n\n"
             f"🔧 Режим: {mode_tag}\n"
-            f"💳 Баланс: ${wallet_balance:.2f} USDC\n\n"
+            f"{balance_line}\n\n"
             f"👀 Отслеживаю:\n{traders_list}\n\n"
             f"⚙️ Параметры:\n"
+            f"  • Фильтр цены: {config.MIN_ENTRY_PRICE}–{config.MAX_ENTRY_PRICE}\n"
             f"  • MAX_POSITION: ${config.MAX_POSITION_USD}\n"
-            f"  • COPY_RATIO: {config.COPY_RATIO * 100:.0f}%\n"
             f"  • STOP_LOSS: {(1 - config.STOP_LOSS_PERCENT) * 100:.0f}%\n"
             f"  • MAX_POSITIONS: {config.MAX_OPEN_POSITIONS}"
             f"{warn_text}"
@@ -302,11 +332,20 @@ class TelegramNotifier:
 
     def notify_bot_stop(self, stats: dict):
         """🛑 Уведомление об остановке бота."""
+        deposit_line = ""
+        if config.DRY_RUN:
+            initial = stats.get('initial_deposit', 0)
+            equity = stats.get('virtual_equity', 0)
+            roi = ((equity - initial) / initial * 100) if initial > 0 else 0
+            deposit_line = (
+                f"\n💼 Депозит: ${initial:.2f} → ${equity:.2f} ({roi:+.1f}%)"
+            )
         text = (
             f"🛑 <b>Бот остановлен</b>\n\n"
             f"📊 Итоги сессии:\n"
             f"  • Скопировано: {stats['total_copied']}\n"
             f"  • PnL: ${stats['total_pnl']:.2f}"
+            f"{deposit_line}"
         )
         self.send(text)
 
@@ -515,6 +554,9 @@ class PolymarketCopyBot:
             daemon=True,
         )
         self._status_thread.start()
+
+        # Запускаем Flask-дашборд в фоновом потоке
+        run_dashboard(bot_instance=self)
 
         self.logger.info("✅ Бот успешно запущен. Нажмите Ctrl+C для остановки.")
 
@@ -738,7 +780,8 @@ class PolymarketCopyBot:
 
     def _on_trade_executed(self, position: OpenPosition, activity: TradeActivity):
         """✅ Сделка исполнена — отправляем SIGNAL карточку."""
-        self.notifier.notify_signal(position, activity)
+        balance = self.risk_manager._virtual_balance
+        self.notifier.notify_signal(position, activity, balance=balance)
 
     def _on_trade_skipped(self, activity: TradeActivity, reason: str):
         """⏭ Сделка пропущена."""

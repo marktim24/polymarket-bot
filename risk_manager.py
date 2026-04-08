@@ -244,6 +244,10 @@ class RiskManager:
         # Начальный баланс сессии (для расчёта просадки)
         self._session_start_balance: float = 0.0
 
+        # Виртуальный депозит (DRY_RUN)
+        self._virtual_balance: float = config.VIRTUAL_DEPOSIT_USD if config.DRY_RUN else 0.0
+        self._initial_deposit: float = self._virtual_balance
+
         # HTTP сессия для цен
         self._session = requests.Session()
         self._session.headers.update({"Accept": "application/json"})
@@ -328,6 +332,10 @@ class RiskManager:
                 current_exposure + position_size, config.MAX_TOTAL_EXPOSURE_USD
             )
 
+        # 8b. Виртуальный баланс (DRY_RUN)
+        if config.DRY_RUN and self._virtual_balance < position_size:
+            return False, f"Недостаточно виртуального баланса: ${self._virtual_balance:.2f} < ${position_size:.2f}"
+
         # 9. Дневной лимит потерь
         if abs(self._daily.realized_loss) >= config.DAILY_LOSS_LIMIT_USD:
             return False, SkipReason.DAILY_LOSS.format(
@@ -387,10 +395,13 @@ class RiskManager:
         with self._lock:
             self._positions[position.order_id] = position
             self.total_copied += 1
+            if config.DRY_RUN:
+                self._virtual_balance -= position.size_usd
         logger.info(
-            "✅ Позиция открыта [%s]: %s | трейдер=%s | цена=%.3f | $%.2f",
+            "✅ Позиция открыта [%s]: %s | трейдер=%s | цена=%.3f | $%.2f | баланс=$%.2f",
             position.signal_type, position.order_id[:16],
             position.trader_name, position.entry_price, position.size_usd,
+            self._virtual_balance,
         )
 
     def close_position(
@@ -405,6 +416,10 @@ class RiskManager:
         position.closed_at = datetime.now(timezone.utc)
         position.realized_pnl = realized_pnl
         self.session_realized_pnl += realized_pnl
+
+        # Возврат средств на виртуальный баланс
+        if config.DRY_RUN:
+            self._virtual_balance += position.size_usd + realized_pnl
 
         # Обновляем дневную статистику
         self._ensure_daily_stats()
@@ -618,18 +633,26 @@ class RiskManager:
     def get_session_stats(self) -> dict:
         self._ensure_daily_stats()
         open_positions = self.get_open_positions()
+        unrealized = self.get_total_unrealized_pnl()
+        exposure = self.get_total_exposure()
+        total_pnl = self.session_realized_pnl + unrealized
+        # Виртуальный баланс = свободные средства + стоимость открытых позиций
+        virtual_equity = self._virtual_balance + exposure + unrealized
         return {
             "total_copied": self.total_copied,
             "total_skipped": self.total_skipped,
             "open_positions": len(open_positions),
             "closed_positions": len(self._closed_positions),
-            "total_exposure_usd": self.get_total_exposure(),
-            "unrealized_pnl": self.get_total_unrealized_pnl(),
+            "total_exposure_usd": exposure,
+            "unrealized_pnl": unrealized,
             "realized_pnl": self.session_realized_pnl,
-            "total_pnl": self.session_realized_pnl + self.get_total_unrealized_pnl(),
+            "total_pnl": total_pnl,
             "daily_loss": self._daily.realized_loss,
             "daily_consecutive_losses": self._daily.consecutive_losses,
             "trading_halted": self._daily.trading_halted,
+            "virtual_balance": self._virtual_balance,
+            "virtual_equity": virtual_equity,
+            "initial_deposit": self._initial_deposit,
         }
 
     def get_daily_stats(self) -> DailyStats:
