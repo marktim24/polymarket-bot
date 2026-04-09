@@ -34,15 +34,6 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 TRADERS: list[dict] = [
     {
-        "name": "sayber",
-        "address": "0x96b41aac95788f717d0566210cda48e8e686c2f1",
-        "role": "COPY",
-        "strategy": "политика + спорт + крипто",
-        "win_rate": 0.88,
-        "sharpe": 4.13,
-        "entry_range": (0.55, 0.65),
-    },
-    {
         "name": "WizzleGizzle",
         "address": "0xcacf2bf1906bb3c74a0e0453bfb91f1374e335ff",
         "role": "COPY",
@@ -78,42 +69,6 @@ TRADERS: list[dict] = [
             "MAX_HOLD_HOURS": 4320.0,                 # 180 дней
             # Выход по sell трейдера — только если оригинальная позиция > $1.00
             "MIN_TRADER_EXIT_SIZE_USD": 1.0,
-        },
-    },
-    {
-        "name": "gatorr",
-        "address": "0x93abbc022ce98d6f45d4444b594791cc4b7a9723",
-        "role": "COPY",
-        "strategy": "NBA + NHL: moneyline + O/U totals",
-        "win_rate": 0.66,
-        "sharpe": 0.0,
-        "entry_range": (0.44, 0.52),
-        # ---- Per-trader overrides ----
-        "overrides": {
-            # Фильтры входа — узкий "value zone" 0.44-0.52
-            # Его средняя: ML=0.462, O/U=0.507. Диапазон 0.44-0.52 покрывает ядро
-            "MIN_ENTRY_PRICE": 0.44,
-            "MAX_ENTRY_PRICE": 0.52,
-            # Минимум $1 — пропускаем микро-ставки <$1
-            "MIN_TRADER_SIZE_USD": 1.0,
-            # Копировать в течение 30 мин (спортивные рынки быстро двигаются)
-            "MAX_COPY_DELAY_HOURS": 0.5,
-            # Не копировать если цена ушла >20% от входа трейдера
-            "MAX_PRICE_RATIO_VS_ENTRY": 1.20,
-            # Размер позиции (умеренный — высокий WR, средний payoff)
-            "HIGH_POSITION_USD": 5.0,
-            "MEDIUM_POSITION_USD": 3.0,
-            "BASE_POSITION_USD": 2.0,
-            # Стоп-лосс: 30% падение (спорт = resolved быстро, SL мягче)
-            "STOP_LOSS_PERCENT": 0.70,
-            # Тейк-профит: спорт resolved в 0 или 1, TP редко срабатывает до резолюции
-            "TAKE_PROFIT_1_PCT": 0.30,       # +30%
-            "TAKE_PROFIT_2_PCT": 0.60,       # +60%
-            "TAKE_PROFIT_1_CLOSE_RATIO": 0.50,
-            "TAKE_PROFIT_2_CLOSE_RATIO": 0.50,
-            # Спорт-события резолвятся быстро — макс. 48 часов
-            "MAX_HOLD_HOURS": 48.0,
-            "TIME_STOP_NO_MOVEMENT_HOURS": 24.0,
         },
     },
 ]
@@ -156,7 +111,7 @@ VIRTUAL_DEPOSIT_USD: float = float(os.getenv("VIRTUAL_DEPOSIT_USD", "100.0"))
 # Только сделки этих трейдеров проходят в SIGNAL_ONLY режиме
 WHITELIST_TRADERS: list[str] = [
     name.strip()
-    for name in os.getenv("WHITELIST_TRADERS", "sayber,WizzleGizzle,gatorr").split(",")
+    for name in os.getenv("WHITELIST_TRADERS", "WizzleGizzle").split(",")
     if name.strip()
 ]
 

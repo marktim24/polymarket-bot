@@ -32,7 +32,7 @@ class TradeActivity:
 
     def __init__(self, raw: dict):
         self.id: str = raw.get("id") or raw.get("transactionHash", "")
-        self.action: str = (raw.get("type") or raw.get("side") or "").upper()
+        self.action: str = (raw.get("side") or raw.get("type") or "").upper()
         self.token_id: str = (
             raw.get("conditionId")
             or raw.get("tokenId")
@@ -167,12 +167,13 @@ class SignalClassifier:
             if any(kw in slug for kw in crypto_keywords):
                 return "IGNORE", f"крипто micro-market: {slug[:40]}", 0.0
 
-        # ---- Проверка 2: время до резолюции ----
+        # ---- Проверка 2: время до резолюции (per-trader) ----
+        min_resolution = config.get_trader_config(trader_name, "MIN_MARKET_RESOLUTION_HOURS", config.MIN_MARKET_RESOLUTION_HOURS)
         hours_left = self._market_checker.get_hours_to_resolution(token_id)
-        if hours_left is not None and hours_left < config.MIN_MARKET_RESOLUTION_HOURS:
+        if hours_left is not None and hours_left < min_resolution:
             return (
                 "IGNORE",
-                f"до закрытия рынка {hours_left:.1f}ч < {config.MIN_MARKET_RESOLUTION_HOURS}ч",
+                f"до закрытия рынка {hours_left:.1f}ч < {min_resolution}ч",
                 0.0,
             )
 
