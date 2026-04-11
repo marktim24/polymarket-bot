@@ -11,6 +11,8 @@ monitor.py — Мониторинг активности трейдеров + к
 - Детекция продаж трейдеров для сигнала выхода
 """
 
+import os
+import json
 import time
 import logging
 import threading
@@ -399,6 +401,9 @@ class TraderMonitor:
     - Добавляет сигнал в отдельную sell-очередь при SELL-активности
     """
 
+    # Максимальное количество ID в кэше дедупликации
+    _SEEN_IDS_MAX = 2000
+
     def __init__(self, trader: dict, buy_queue, sell_signals: dict):
         self.trader = trader
         self.name: str = trader["name"]
@@ -415,8 +420,42 @@ class TraderMonitor:
         self.last_error: Optional[str] = None
         self._initialized: bool = False
 
+        # Файл персистентного хранилища seen_ids
+        os.makedirs("logs", exist_ok=True)
+        self._seen_ids_file = f"logs/seen_ids_{self.name.lower()}.json"
+        self._load_seen_ids()
+
         self._session = requests.Session()
         self._session.headers.update({"Accept": "application/json"})
+
+    def _load_seen_ids(self):
+        """Загружает seen_ids с диска (сохраняется между перезапусками)."""
+        try:
+            with open(self._seen_ids_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                self._seen_ids = set(data.get("ids", []))
+                self._initialized = data.get("initialized", False)
+            logger.info(
+                "[%s] Загружено %d seen_ids из %s (initialized=%s)",
+                self.name, len(self._seen_ids), self._seen_ids_file, self._initialized,
+            )
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning("[%s] Не удалось загрузить seen_ids: %s", self.name, e)
+
+    def _save_seen_ids(self):
+        """Сохраняет seen_ids на диск. Обрезает до _SEEN_IDS_MAX элементов."""
+        try:
+            ids_list = list(self._seen_ids)
+            # Ограничиваем размер — удаляем старые (берём последние _SEEN_IDS_MAX)
+            if len(ids_list) > self._SEEN_IDS_MAX:
+                ids_list = ids_list[-self._SEEN_IDS_MAX:]
+                self._seen_ids = set(ids_list)
+            with open(self._seen_ids_file, "w", encoding="utf-8") as f:
+                json.dump({"ids": ids_list, "initialized": self._initialized}, f)
+        except Exception as e:
+            logger.warning("[%s] Не удалось сохранить seen_ids: %s", self.name, e)
 
     def _fetch_activity(self) -> list[dict]:
         """Запрашивает последние ACTIVITY_FETCH_LIMIT активностей (было 5, стало 20)."""
@@ -465,13 +504,14 @@ class TraderMonitor:
         if not raw_activities:
             return 0
 
-        # При первом опросе — только запоминаем ID
+        # При первом опросе — только запоминаем ID (если не загружены с диска)
         if not self._initialized:
             for raw in raw_activities:
                 a = TradeActivity(raw)
                 if a.id:
                     self._seen_ids.add(a.id)
             self._initialized = True
+            self._save_seen_ids()
             logger.info(
                 "[%s] Инициализация: запомнено %d существующих активностей",
                 self.name, len(self._seen_ids),
@@ -486,6 +526,7 @@ class TraderMonitor:
             if not activity.id or activity.id in self._seen_ids:
                 continue
             self._seen_ids.add(activity.id)
+            self._save_seen_ids()
 
             # --- Обработка SELL: записываем в sell_signals ---
             if activity.is_sell() and activity.token_id:
@@ -501,15 +542,19 @@ class TraderMonitor:
 
             # --- Только BUY дальше ---
             if not activity.is_valid_buy():
+                logger.debug(
+                    "[%s] Пропуск (не valid_buy): action=%s price=%.4f size=%.2f",
+                    self.name, activity.action, activity.price, activity.size_usd,
+                )
                 continue
 
             # --- Фильтр 1: возраст сигнала (per-trader max copy delay) ---
             max_age = config.get_trader_config(self.name, "MAX_COPY_DELAY_HOURS", config.MAX_SIGNAL_AGE_HOURS)
             age = activity.age_hours()
             if age > max_age:
-                logger.debug(
-                    "[%s] Пропуск: сделка слишком старая (%.1fч > %.1fч)",
-                    self.name, age, max_age
+                logger.info(
+                    "[%s] ⏸ Пропуск: сделка слишком старая (%.1fч > %.1fч) tx=%s",
+                    self.name, age, max_age, activity.id[:16],
                 )
                 self.total_skipped += 1
                 continue

@@ -34,17 +34,81 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 TRADERS: list[dict] = [
     {
+        "name": "sayber",
+        "address": "0x96b41aac95788f717d0566210cda48e8e686c2f1",
+        "role": "COPY",
+        "strategy": "Политика + Спорт + Крипто (value zone 0.30–0.70)",
+        "win_rate": 0.88,
+        "sharpe": 0.0,
+        "entry_range": (0.20, 0.75),
+        "overrides": {
+            "MIN_ENTRY_PRICE": 0.20,
+            "MAX_ENTRY_PRICE": 0.75,
+            "MIN_TRADER_SIZE_USD": 1.0,
+            "MAX_COPY_DELAY_HOURS": 2.0,
+            "MAX_PRICE_RATIO_VS_ENTRY": 3.0,
+            "MIN_MARKET_VOLUME_USD": 500.0,
+            "SKIP_CRYPTO_MICRO": False,
+            "SKIP_CATEGORIES": [],
+            "COPY_CATEGORIES": ["sports", "politics", "crypto", "culture"],
+            "HIGH_POSITION_USD": 4.0,
+            "MEDIUM_POSITION_USD": 3.0,
+            "BASE_POSITION_USD": 2.0,
+            "SPORTS_SIZE_MULTIPLIER": 1.0,
+            "STOP_LOSS_PERCENT": 0.70,
+            "TAKE_PROFIT_1_PCT": 0.30,
+            "TAKE_PROFIT_2_PCT": 0.70,
+            "TAKE_PROFIT_1_CLOSE_RATIO": 0.50,
+            "TAKE_PROFIT_2_CLOSE_RATIO": 0.25,
+            "TIME_STOP_NO_MOVEMENT_HOURS": 48.0,
+            "MAX_HOLD_HOURS": 120.0,
+            "MIN_TRADER_EXIT_SIZE_USD": 2.0,
+        },
+    },
+    {
+        "name": "gatorr",
+        "address": "0xead152b855effa6b5b5837f53b24c0756830c76a",
+        "role": "COPY",
+        "strategy": "Спорт + Политика (active swing trader 0.30–0.75)",
+        "win_rate": 0.0,
+        "sharpe": 0.0,
+        "entry_range": (0.25, 0.80),
+        "overrides": {
+            "MIN_ENTRY_PRICE": 0.25,
+            "MAX_ENTRY_PRICE": 0.80,
+            "MIN_TRADER_SIZE_USD": 1.0,
+            "MAX_COPY_DELAY_HOURS": 2.0,
+            "MAX_PRICE_RATIO_VS_ENTRY": 3.0,
+            "MIN_MARKET_VOLUME_USD": 500.0,
+            "SKIP_CRYPTO_MICRO": False,
+            "SKIP_CATEGORIES": [],
+            "COPY_CATEGORIES": ["sports", "politics", "culture"],
+            "HIGH_POSITION_USD": 4.0,
+            "MEDIUM_POSITION_USD": 3.0,
+            "BASE_POSITION_USD": 2.0,
+            "SPORTS_SIZE_MULTIPLIER": 1.0,
+            "STOP_LOSS_PERCENT": 0.70,
+            "TAKE_PROFIT_1_PCT": 0.30,
+            "TAKE_PROFIT_2_PCT": 0.70,
+            "TAKE_PROFIT_1_CLOSE_RATIO": 0.50,
+            "TAKE_PROFIT_2_CLOSE_RATIO": 0.25,
+            "TIME_STOP_NO_MOVEMENT_HOURS": 48.0,
+            "MAX_HOLD_HOURS": 120.0,
+            "MIN_TRADER_EXIT_SIZE_USD": 2.0,
+        },
+    },
+    {
         "name": "WizzleGizzle",
         "address": "0xcacf2bf1906bb3c74a0e0453bfb91f1374e335ff",
         "role": "COPY",
         "strategy": "long-shot: sports, politics, music, weather (hold to resolution)",
         "win_rate": 0.0,   # не подтверждён — фильтр по edge, не WR
         "sharpe": 0.0,
-        "entry_range": (0.02, 0.15),
+        "entry_range": (0.01, 0.15),
         # ---- Per-trader overrides ----
         "overrides": {
             # Фильтры входа
-            "MIN_ENTRY_PRICE": 0.02,
+            "MIN_ENTRY_PRICE": 0.01,
             "MAX_ENTRY_PRICE": 0.15,
             "MIN_TRADER_SIZE_USD": 0.50,      # пропускать микро-позиции < $0.50
             "MAX_COPY_DELAY_HOURS": 1.0,       # копировать в течение 1 часа
@@ -111,7 +175,7 @@ VIRTUAL_DEPOSIT_USD: float = float(os.getenv("VIRTUAL_DEPOSIT_USD", "100.0"))
 # Только сделки этих трейдеров проходят в SIGNAL_ONLY режиме
 WHITELIST_TRADERS: list[str] = [
     name.strip()
-    for name in os.getenv("WHITELIST_TRADERS", "WizzleGizzle").split(",")
+    for name in os.getenv("WHITELIST_TRADERS", "sayber,gatorr,WizzleGizzle").split(",")
     if name.strip()
 ]
 
@@ -127,13 +191,13 @@ MIN_TIME_TO_RESOLUTION_HOURS: float = float(
 # КЛАССИФИКАЦИЯ СИГНАЛОВ
 # ============================================================
 
-# HIGH сигнал: оба трейдера COPY + подтверждение
-SIGNAL_HIGH_MIN_PRICE: float = 0.55
-SIGNAL_HIGH_MAX_PRICE: float = 0.65
+# HIGH сигнал: оба трейдера COPY + подтверждение (глобальный диапазон)
+SIGNAL_HIGH_MIN_PRICE: float = 0.05
+SIGNAL_HIGH_MAX_PRICE: float = 0.95
 
 # MEDIUM сигнал: один COPY трейдер
-SIGNAL_MEDIUM_MIN_PRICE: float = 0.55
-SIGNAL_MEDIUM_MAX_PRICE: float = 0.65
+SIGNAL_MEDIUM_MIN_PRICE: float = 0.05
+SIGNAL_MEDIUM_MAX_PRICE: float = 0.95
 
 # Окно времени для confluence (часы) — сколько держать буфер предыдущих сделок
 SIGNAL_CONFLUENCE_WINDOW_HOURS: float = 1.0
@@ -148,9 +212,9 @@ MIN_MARKET_RESOLUTION_HOURS: float = float(os.getenv("MIN_MARKET_RESOLUTION_HOUR
 # ФИЛЬТРЫ СДЕЛОК
 # ============================================================
 
-# Диапазон допустимых цен входа (обновлён с 0.05–0.70 на 0.20–0.55)
-MIN_ENTRY_PRICE: float = float(os.getenv("MIN_ENTRY_PRICE", "0.55"))
-MAX_ENTRY_PRICE: float = float(os.getenv("MAX_ENTRY_PRICE", "0.65"))
+# Диапазон допустимых цен входа — глобальный fallback (переопределяется per-trader override)
+MIN_ENTRY_PRICE: float = float(os.getenv("MIN_ENTRY_PRICE", "0.05"))
+MAX_ENTRY_PRICE: float = float(os.getenv("MAX_ENTRY_PRICE", "0.95"))
 
 # Максимальный возраст сигнала — сделки старше этого игнорируются
 MAX_SIGNAL_AGE_HOURS: float = float(os.getenv("MAX_SIGNAL_AGE_HOURS", "12.0"))
@@ -159,8 +223,8 @@ MAX_SIGNAL_AGE_HOURS: float = float(os.getenv("MAX_SIGNAL_AGE_HOURS", "12.0"))
 # Если цена уже сдвинулась на >10% — слишком поздно входить
 MAX_PRICE_MOVEMENT_PCT: float = float(os.getenv("MAX_PRICE_MOVEMENT_PCT", "0.10"))
 
-# Лимит записей активности при опросе API (был 5, теперь 20)
-ACTIVITY_FETCH_LIMIT: int = int(os.getenv("ACTIVITY_FETCH_LIMIT", "20"))
+# Лимит записей активности при опросе API (увеличен до 50 для устойчивости к burst-сделкам)
+ACTIVITY_FETCH_LIMIT: int = int(os.getenv("ACTIVITY_FETCH_LIMIT", "50"))
 
 # Интервал опроса API в секундах
 POLL_INTERVAL_SEC: int = int(os.getenv("POLL_INTERVAL_SEC", "30"))
@@ -276,3 +340,23 @@ def validate_config() -> list[str]:
     if not TELEGRAM_CHAT_ID:
         warnings.append("TELEGRAM_CHAT_ID не задан — уведомления отключены")
     return warnings
+
+
+# ============================================================
+# НАСТРОЙКИ АВТОМАТИЧЕСКОГО ОБНАРУЖЕНИЯ КОШЕЛЬКОВ
+# ============================================================
+
+# Минимум симулированных сделок перед рассмотрением продвижения
+DISCOVERY_MIN_TRADES: int = int(os.getenv("DISCOVERY_MIN_TRADES", "5"))
+
+# Минимальный win rate (закрытые сделки с прибылью / всего закрытых)
+DISCOVERY_MIN_WIN_RATE: float = float(os.getenv("DISCOVERY_MIN_WIN_RATE", "0.55"))
+
+# Реализованный PnL должен быть строго положительным
+DISCOVERY_MIN_PNL_USD: float = float(os.getenv("DISCOVERY_MIN_PNL_USD", "0.0"))
+
+# Максимум дней на оценку — после этого авто-отклонение если критерии не выполнены
+DISCOVERY_MAX_EVAL_DAYS: int = int(os.getenv("DISCOVERY_MAX_EVAL_DAYS", "7"))
+
+# Файл состояния кошельков-кандидатов
+DISCOVERY_STATE_FILE: str = os.getenv("DISCOVERY_STATE_FILE", "logs/candidate_wallets.json")

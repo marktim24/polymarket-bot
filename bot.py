@@ -25,6 +25,7 @@ import config
 from monitor import MonitorManager, TradeActivity
 from risk_manager import RiskManager, OpenPosition
 from executor import OrderExecutor
+from discovery import CandidatePool, CandidateMonitor
 from dashboard import run_dashboard
 
 
@@ -513,6 +514,10 @@ class PolymarketCopyBot:
         self._active_signals: dict[str, dict] = {}
         self._signal_lock = threading.Lock()
 
+        # ---- Обнаружение кандидатов (wallet discovery) ----
+        self.candidate_pool = CandidatePool()
+        self.candidate_monitor = CandidateMonitor(self.candidate_pool)
+
     # ----------------------------------------------------------
     # LIFECYCLE
     # ----------------------------------------------------------
@@ -530,6 +535,14 @@ class PolymarketCopyBot:
 
         # Запускаем мониторинг трейдеров
         self.monitor_manager.start()
+
+        # Запускаем монитор кандидатов (если есть на оценке)
+        if self.candidate_pool.get_evaluating():
+            self.candidate_monitor.start()
+            self.logger.info(
+                "🔎 Monitoring %d candidate wallets",
+                len(self.candidate_pool.get_evaluating()),
+            )
 
         # В SIGNAL_ONLY режиме стоп-лосс и executor НЕ запускаются
         if config.MODE != "SIGNAL_ONLY":
@@ -571,6 +584,7 @@ class PolymarketCopyBot:
 
         # Останавливаем компоненты
         self.monitor_manager.stop()
+        self.candidate_monitor.stop()
         if config.MODE != "SIGNAL_ONLY":
             self.risk_manager.stop_stop_loss_monitor()
 
