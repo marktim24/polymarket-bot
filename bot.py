@@ -9,6 +9,13 @@ bot.py — Главный модуль Polymarket Copy-Trading Bot v2.0.
 """
 
 import sys
+
+# Reconfigure stdout/stderr to UTF-8 so Unicode chars (emoji, Cyrillic) don't
+# crash when Python is launched with a redirected cp1252 stream on Windows.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 import signal
 import json
 import logging
